@@ -148,7 +148,7 @@ def monday(query, variables=None):
     resp = http_json(MONDAY_API, headers={
         "Authorization": os.environ["MONDAY_API_TOKEN"],
         "Content-Type": "application/json",
-        "API-Version": "2024-10",
+        "API-Version": "2026-07",
     }, body={"query": query, "variables": variables or {}})
     if resp.get("errors"):
         raise RuntimeError(f"monday API error: {json.dumps(resp['errors'])[:1000]}")
