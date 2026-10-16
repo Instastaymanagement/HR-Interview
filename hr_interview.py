@@ -517,6 +517,13 @@ def main():
                 log(f"! {c['name']}: {e}")
                 report.append(f"ERROR {c['name']}: {str(e)[:300]}")
 
+    if DRY_RUN:
+        stages = {}
+        for c in cands:
+            stages[c["stage"] or "(blank)"] = stages.get(c["stage"] or "(blank)", 0) + 1
+        report.insert(0, f"Quo lines found: {', '.join(lines) or 'none'}. Candidates by stage: "
+                         + ", ".join(f"{k}: {v}" for k, v in stages.items())
+                         + f". Texting stages: {', '.join(CONTACT_STAGES)}.")
     log("\n".join(report) or "Nothing to do.")
     annotate(f"Candidate texts{' (dry run)' if DRY_RUN else ''}", report)
     if errors and errors == len(report):
