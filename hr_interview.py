@@ -268,7 +268,7 @@ def load_candidates(board_id):
     cols = board_columns(board_id)
     for title in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes"):
         if title not in cols:
-            raise RuntimeError(f"Vacancies board has no '{title}' column")
+            raise RuntimeError(f"Vacancies board has no '{title}' column (the API returned: {', '.join(cols)})")
     wanted = [cols[t] for t in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes", "Location",
                                 "Relevant Experience", "Flags / Ask on Call", "Car / Licence") if t in cols]
     query = """query($id:[ID!], $cols:[String!]){boards(ids:$id){items_page(limit:500){cursor
