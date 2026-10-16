@@ -272,15 +272,17 @@ def load_candidates(board_id):
     wanted = [cols[t] for t in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes", "Location",
                                 "Relevant Experience", "Flags / Ask on Call", "Car / Licence") if t in cols]
     query = """query($id:[ID!], $cols:[String!]){boards(ids:$id){items_page(limit:500){cursor
-        items{id name group{id title} column_values(ids:$cols){id text ... on StatusValue{label} ... on PhoneValue{phone}}}}}}"""
+        items{id name group{id title} column_values(ids:$cols){id text value ... on StatusValue{label} ... on PhoneValue{phone}}}}}}"""
     next_query = """query($cursor:String!, $cols:[String!]){next_items_page(limit:500, cursor:$cursor){cursor
-        items{id name group{id title} column_values(ids:$cols){id text ... on StatusValue{label} ... on PhoneValue{phone}}}}}"""
+        items{id name group{id title} column_values(ids:$cols){id text value ... on StatusValue{label} ... on PhoneValue{phone}}}}}"""
     page = monday(query, {"id": [board_id], "cols": wanted})["boards"][0]["items_page"]
     items = list(page["items"])
     while page.get("cursor"):
         page = monday(next_query, {"cursor": page["cursor"], "cols": wanted})["next_items_page"]
         items.extend(page["items"])
     by_id = {v: k for k, v in cols.items()}
+    if DRY_RUN and items and os.environ.get("GITHUB_ACTIONS"):
+        log("::notice title=Debug first item::" + json.dumps(items[0]["column_values"])[:1500])
     out = []
     for it in items:
         # On multi-level boards status and phone values may leave `text` empty, so read their typed fields too.
