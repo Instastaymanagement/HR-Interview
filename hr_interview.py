@@ -282,7 +282,10 @@ def load_candidates(board_id):
         items.extend(page["items"])
     by_id = {v: k for k, v in cols.items()}
     if DRY_RUN and items and os.environ.get("GITHUB_ACTIONS"):
-        log("::notice title=Debug first item::" + json.dumps(items[0]["column_values"])[:1500])
+        dbg = monday("""query($id:[ID!]){items(ids:$id){column_values{id type text value ... on StatusValue{label index}}}}""",
+                     {"id": [items[0]["id"]]})
+        log("::notice title=Debug first item::" + json.dumps([(c["id"], c["type"], c.get("label"), (c.get("value") or "")[:60])
+                                                             for c in dbg["items"][0]["column_values"]])[:1800])
     out = []
     for it in items:
         # On multi-level boards status and phone values may leave `text` empty, so read their typed fields too.
