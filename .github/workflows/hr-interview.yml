@@ -1,0 +1,47 @@
+name: Screen candidates over Quo
+
+# Started every 2 minutes by an external cron (cron-job.org), see README. There is deliberately
+# no GitHub schedule, so nothing is texted until that cron job is switched on.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Show the texts it would send without sending them or changing monday.com"
+        type: boolean
+        default: true
+
+# One run at a time, so a candidate never gets two replies to the same message.
+concurrency:
+  group: hr-interview
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests
+      - name: Screen candidates
+        env:
+          QUO_API_KEY: ${{ secrets.QUO_API_KEY }}
+          MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+          # Scheduled runs text for real; manual runs default to a dry run.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+          VACANCIES_BOARD: "18435820027"
+          # Canada vacancies text from the London line, USA vacancies from the Boston line
+          QUO_NUMBERS: "+12267813731=Canada,+18573538919=USA"
+          # Hiring Stages the automation starts texting, e.g. "Shortlist – Call,Maybe"
+          CONTACT_STAGES: "Shortlist – Call"
+          SEND_FROM_HOUR: "9"
+          SEND_UNTIL_HOUR: "20"
+        run: python hr_interview.py
