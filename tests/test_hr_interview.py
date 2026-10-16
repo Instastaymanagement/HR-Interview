@@ -67,6 +67,19 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(h.should_screen(cand(stage="Good Fit", tracking="in=x;sent=2")))
 
 
+class CellTextTests(unittest.TestCase):
+    labels = {"stage": {"1": "Shortlist – Call", "7": "Contacted"}}
+
+    def test_battery_status(self):
+        self.assertEqual(h.cell_text({"id": "stage", "text": "", "battery_value": [{"key": "1", "count": 1}]}, self.labels),
+                         "Shortlist – Call")
+        self.assertEqual(h.cell_text({"id": "stage", "text": "", "battery_value": []}, self.labels), "")
+
+    def test_plain_and_phone(self):
+        self.assertEqual(h.cell_text({"id": "x", "text": " London "}, {}), "London")
+        self.assertEqual(h.cell_text({"id": "p", "text": "", "phone": "+12267009127"}, {}), "+12267009127")
+
+
 class HandleCandidateTests(unittest.TestCase):
     def run_handle(self, c, msgs, result, now=NOON):
         calls = {"sent": [], "updates": [], "posts": []}

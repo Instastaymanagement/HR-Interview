@@ -260,37 +260,48 @@ def role_info(roles, group_title):
 # --------------------------------------------------------------------------- monday
 
 def board_columns(board_id):
-    data = monday("query($id:[ID!]){boards(ids:$id){columns{id title type}}}", {"id": [board_id]})
-    return {c["title"]: c["id"] for c in data["boards"][0]["columns"]}
+    """(title -> column id, column id -> {label id -> label} for status columns)."""
+    data = monday("query($id:[ID!]){boards(ids:$id){columns{id title type settings}}}", {"id": [board_id]})
+    columns = data["boards"][0]["columns"]
+    labels = {}
+    for c in columns:
+        if c["type"] == "status":
+            settings = c.get("settings") or {}
+            if isinstance(settings, str):
+                settings = json.loads(settings or "{}")
+            labels[c["id"]] = {str(l["id"]): l["label"] for l in settings.get("labels") or []}
+    return {c["title"]: c["id"] for c in columns}, labels
+
+
+def cell_text(cell, status_labels):
+    """Plain text of a column value. On multi-level boards a status comes back as a BatteryValue
+    holding the label id, so look that up; phones may also leave `text` empty."""
+    if cell.get("battery_value") is not None:
+        keys = [b["key"] for b in cell["battery_value"] if b.get("count")]
+        return status_labels.get(cell["id"], {}).get(keys[0], "") if keys else ""
+    return (cell.get("text") or cell.get("phone") or "").strip()
 
 
 def load_candidates(board_id):
-    cols = board_columns(board_id)
+    cols, status_labels = board_columns(board_id)
     for title in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes"):
         if title not in cols:
             raise RuntimeError(f"Vacancies board has no '{title}' column (the API returned: {', '.join(cols)})")
     wanted = [cols[t] for t in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes", "Location",
                                 "Relevant Experience", "Flags / Ask on Call", "Car / Licence") if t in cols]
     query = """query($id:[ID!], $cols:[String!]){boards(ids:$id){items_page(limit:500){cursor
-        items{id name group{id title} column_values(ids:$cols){id text value ... on StatusValue{label} ... on PhoneValue{phone}}}}}}"""
+        items{id name group{id title} column_values(ids:$cols, capabilities:[CALCULATED]){id text ... on BatteryValue{battery_value{key count}} ... on PhoneValue{phone}}}}}}"""
     next_query = """query($cursor:String!, $cols:[String!]){next_items_page(limit:500, cursor:$cursor){cursor
-        items{id name group{id title} column_values(ids:$cols){id text value ... on StatusValue{label} ... on PhoneValue{phone}}}}}"""
+        items{id name group{id title} column_values(ids:$cols, capabilities:[CALCULATED]){id text ... on BatteryValue{battery_value{key count}} ... on PhoneValue{phone}}}}}"""
     page = monday(query, {"id": [board_id], "cols": wanted})["boards"][0]["items_page"]
     items = list(page["items"])
     while page.get("cursor"):
         page = monday(next_query, {"cursor": page["cursor"], "cols": wanted})["next_items_page"]
         items.extend(page["items"])
     by_id = {v: k for k, v in cols.items()}
-    if DRY_RUN and items and os.environ.get("GITHUB_ACTIONS"):
-        dbg = monday("""query($id:[ID!]){items(ids:$id){column_values{id type text value ... on StatusValue{label index}}}}""",
-                     {"id": [items[0]["id"]]})
-        log("::notice title=Debug first item::" + json.dumps([(c["id"], c["type"], c.get("label"), (c.get("value") or "")[:60])
-                                                             for c in dbg["items"][0]["column_values"]])[:1800])
     out = []
     for it in items:
-        # On multi-level boards status and phone values may leave `text` empty, so read their typed fields too.
-        vals = {by_id[c["id"]]: (c.get("text") or c.get("label") or c.get("phone") or "").strip()
-                for c in it["column_values"] if c["id"] in by_id}
+        vals = {by_id[c["id"]]: cell_text(c, status_labels) for c in it["column_values"] if c["id"] in by_id}
         last_in, sent = parse_tracking(vals.get("Quo Last Message"))
         out.append({
             "id": int(it["id"]), "name": it["name"], "group": it["group"]["title"],
