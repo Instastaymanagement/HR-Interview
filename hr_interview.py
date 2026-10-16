@@ -272,9 +272,9 @@ def load_candidates(board_id):
     wanted = [cols[t] for t in ("Phone", "Hiring Stage", "Quo Last Message", "Screening Notes", "Location",
                                 "Relevant Experience", "Flags / Ask on Call", "Car / Licence") if t in cols]
     query = """query($id:[ID!], $cols:[String!]){boards(ids:$id){items_page(limit:500){cursor
-        items{id name group{id title} column_values(ids:$cols){id text}}}}}"""
+        items{id name group{id title} column_values(ids:$cols){id text ... on StatusValue{label} ... on PhoneValue{phone}}}}}}"""
     next_query = """query($cursor:String!, $cols:[String!]){next_items_page(limit:500, cursor:$cursor){cursor
-        items{id name group{id title} column_values(ids:$cols){id text}}}}"""
+        items{id name group{id title} column_values(ids:$cols){id text ... on StatusValue{label} ... on PhoneValue{phone}}}}}"""
     page = monday(query, {"id": [board_id], "cols": wanted})["boards"][0]["items_page"]
     items = list(page["items"])
     while page.get("cursor"):
@@ -283,7 +283,9 @@ def load_candidates(board_id):
     by_id = {v: k for k, v in cols.items()}
     out = []
     for it in items:
-        vals = {by_id[c["id"]]: (c["text"] or "").strip() for c in it["column_values"] if c["id"] in by_id}
+        # On multi-level boards status and phone values may leave `text` empty, so read their typed fields too.
+        vals = {by_id[c["id"]]: (c.get("text") or c.get("label") or c.get("phone") or "").strip()
+                for c in it["column_values"] if c["id"] in by_id}
         last_in, sent = parse_tracking(vals.get("Quo Last Message"))
         out.append({
             "id": int(it["id"]), "name": it["name"], "group": it["group"]["title"],
