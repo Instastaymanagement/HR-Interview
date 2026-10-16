@@ -6,9 +6,9 @@ It works from the **Vacancies** board in the *Operations Automated* monday.com w
 
 ## What it does every 2 minutes
 
-1. **First text:** every candidate whose **Hiring Stage** is *Shortlist – Call* and who hasn't been texted yet gets a first message. Claude writes it from the role and the candidate's CV notes. The stage changes to **Contacted**.
+1. **First text:** every candidate whose **Hiring Stage** is *Shortlist – Call* (just the board's stage name; there are no phone calls) and who hasn't been texted yet gets a first message. Claude writes it from the role and the candidate's CV notes. The stage changes to **Contacted**.
 2. **Screening:** when a candidate replies, Claude reads the whole thread and texts back the next question. It covers what the role needs (from `roles.json`) and the points in that candidate's *Flags / Ask on Call*: car and licence, availability, distance from London, experience. The stage changes to **Screening**.
-3. **Decision:** once Claude knows enough, it sends a short, friendly sign-off ("someone from the team will be in touch"). It sets the stage to **Good Fit** or **Not a Fit**, writes its reasoning in **Screening Notes**, and posts it as an update on the item. Candidates are never told they're not a fit at this point. If a candidate says they're no longer interested, they're set to **Withdrawn**. If they confirm a car, *Car / Licence* is updated.
+3. **Decision:** once Claude knows enough, it sends a short, friendly sign-off ("someone from the team will text you soon"). It sets the stage to **Good Fit** or **Not a Fit**, writes its reasoning in **Screening Notes**, and posts it as an update on the item. Candidates are never told they're not a fit at this point. If a candidate says they're no longer interested, they're set to **Withdrawn**. If they confirm a car, *Car / Licence* is updated.
 4. **Hired:** when you set anyone in a vacancy to **Hired**, the automation stops screening that vacancy. Everyone else in it who was texted gets a message: the position is filled, thank you, and we'll be in touch if another opening suits them. They're set to **Not Selected**. Candidates who were never texted get no message.
 
 Other rules:
@@ -18,7 +18,7 @@ Other rules:
 - **Send hours:** texts only go out between 9 AM and 8 PM local time. Replies that arrive at night are answered the next morning.
 - **Message limit:** at most 8 texts per candidate. The last one has to include a decision.
 - **Which number sends:** Canada vacancies text from the London Quo line (+1 226-781-3731), USA vacancies from the Boston line (+1 857-353-8919). The country comes from the vacancy's group name, e.g. "London ON".
-- **What Claude won't do:** it never invents pay, hours or start dates. It says the team will cover those on a call. If a candidate sincerely asks whether they're texting a person, it says the messages come from an automated assistant and a team member reviews every conversation.
+- **What Claude won't do:** it never invents pay, hours or start dates. It says someone from the team will follow up with those details by text. The whole interview happens over text: it never suggests a phone call or meeting. If a candidate sincerely asks whether they're texting a person, it says the messages come from an automated assistant and a team member reviews every conversation.
 
 ## Adding a vacancy
 
