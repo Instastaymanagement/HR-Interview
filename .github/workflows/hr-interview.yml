@@ -17,6 +17,10 @@ concurrency:
 
 jobs:
   screen:
+    # Off switch: the screening only runs when the repository variable HR_INTERVIEW_ENABLED
+    # is "true" (Settings -> Secrets and variables -> Actions -> Variables). While it is unset
+    # or anything else, every run is skipped and no texts are sent.
+    if: ${{ vars.HR_INTERVIEW_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
