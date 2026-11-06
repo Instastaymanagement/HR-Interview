@@ -19,6 +19,7 @@ Other rules:
 - **Message limit:** at most 8 texts per candidate. The last one has to include a decision.
 - **Which number sends:** Canada vacancies text from the London Quo line (+1 226-781-3731), USA vacancies from the Boston line (+1 857-353-8919). The country comes from the vacancy's group name, e.g. "London ON".
 - **What Claude won't do:** it never invents pay, hours or start dates. It says someone from the team will follow up with those details by text. The whole interview happens over text: it never suggests a phone call or meeting. If a candidate sincerely asks whether they're texting a person, it says the messages come from an automated assistant and a team member reviews every conversation.
+- **If a text fails to send** (for example Quo is out of prepaid credits), that candidate is left alone for 30 minutes, then 1 h, 2 h and so on up to 24 h, so Claude isn't asked to write the same reply again every 2 minutes. The wait is kept in *Quo Last Message* (`retry=…;fails=…`) and cleared once a text goes through. If Quo refuses for the whole account (out of credits or a bad key), the run stops straight away and shows as failed in Actions.
 
 ## Adding a vacancy
 

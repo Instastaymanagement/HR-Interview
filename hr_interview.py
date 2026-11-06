@@ -59,6 +59,11 @@ ROLES_FILE = os.environ.get("ROLES_FILE") or os.path.join(os.path.dirname(os.pat
 SEND_FROM_HOUR = int(os.environ.get("SEND_FROM_HOUR") or 9)    # local time, inclusive
 SEND_UNTIL_HOUR = int(os.environ.get("SEND_UNTIL_HOUR") or 20)  # local time, exclusive
 MAX_OUR_MESSAGES = 8      # texts we send one candidate before we must decide
+# After a text fails to send, leave that candidate alone (no new Claude call) for this long,
+# doubling on each further failure. Without this, every 2-minute run asked Claude for the same
+# reply again while Quo was out of credits.
+SEND_RETRY_FIRST_MINUTES = 30
+SEND_RETRY_MAX_HOURS = 24
 TIMEZONES = {"Canada": "America/Toronto", "USA": "America/New_York"}
 
 # Hiring Stage labels
@@ -236,9 +241,34 @@ def parse_tracking(value):
     return (iso_ts(last_in) if last_in else 0.0), sent
 
 
-def tracking_value(last_in_ts, sent):
-    stamp = dt.datetime.fromtimestamp(last_in_ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if last_in_ts else ""
-    return f"in={stamp};sent={sent}"
+def parse_retry(value):
+    """Tracking column '...;retry=<ISO>;fails=<n>' -> (don't call Claude again before this timestamp, failed sends)."""
+    fields = dict(p.split("=", 1) for p in (value or "").split(";") if "=" in p)
+    try:
+        until = iso_ts(fields["retry"]) if fields.get("retry") else 0.0
+    except ValueError:
+        until = 0.0
+    try:
+        fails = int(fields.get("fails") or 0)
+    except ValueError:
+        fails = 0
+    return until, fails
+
+
+def _iso(ts):
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else ""
+
+
+def tracking_value(last_in_ts, sent, retry_at=0.0, fails=0):
+    value = f"in={_iso(last_in_ts)};sent={sent}"
+    if retry_at:
+        value += f";retry={_iso(retry_at)};fails={fails}"
+    return value
+
+
+def send_retry_delay(fails):
+    """Seconds to wait after the n-th failed send in a row: 30 min, 1 h, 2 h, ... up to 24 h."""
+    return min(SEND_RETRY_FIRST_MINUTES * 60 * 2 ** max(fails - 1, 0), SEND_RETRY_MAX_HOURS * 3600)
 
 
 def within_send_hours(country, now):
@@ -306,10 +336,12 @@ def load_candidates(board_id):
     for it in items:
         vals = {by_id[c["id"]]: cell_text(c, status_labels) for c in it["column_values"] if c["id"] in by_id}
         last_in, sent = parse_tracking(vals.get("Quo Last Message"))
+        retry_at, fails = parse_retry(vals.get("Quo Last Message"))
         out.append({
             "id": int(it["id"]), "name": it["name"], "group": it["group"]["title"],
             "phone": digits_phone(vals.get("Phone")), "stage": vals.get("Hiring Stage", ""),
             "tracking": vals.get("Quo Last Message", ""), "last_in": last_in, "sent": sent,
+            "retry_at": retry_at, "fails": fails,
             "notes": vals.get("Screening Notes", ""), "location": vals.get("Location", ""),
             "experience": vals.get("Relevant Experience", ""), "flags": vals.get("Flags / Ask on Call", ""),
             "car": vals.get("Car / Licence", ""),
@@ -362,6 +394,10 @@ def thread(line_id, phone):
                          "text": " ".join(m["text"].split())})
     msgs.sort(key=lambda m: m["at"])
     return msgs
+
+
+class QuoUnavailable(RuntimeError):
+    """Quo refused a send for the whole account (out of credits, bad key): no point texting anyone else this run."""
 
 
 def send_text(line_id, phone, text):
@@ -464,9 +500,12 @@ def handle_candidate(c, role, lines, cols, client, now, report):
     line = lines.get(c["country"])
     if not line or not c["phone"]:
         return
+    if c.get("retry_at", 0) > now:
+        return  # an earlier text to them failed to send; wait before asking Claude again
     msgs = thread(line, c["phone"])
     new_in = [m for m in msgs if not m["from_us"] and m["at"] > c["last_in"]]
-    first_contact = c["stage"] in CONTACT_STAGES and not c["tracking"]
+    # Not texted yet. (The tracking column can already hold a retry note if the first text failed.)
+    first_contact = c["stage"] in CONTACT_STAGES and not c["sent"] and not c["last_in"]
     if not first_contact and not new_in:
         return
     if new_in and msgs[-1]["from_us"]:
@@ -493,9 +532,20 @@ def handle_candidate(c, role, lines, cols, client, now, report):
                   + (f" | notes: {result['notes']}" if decision != "continue" else ""))
     if DRY_RUN:
         return
-    if reply:
-        send_text(line, c["phone"], reply)
     last_in = new_in[-1]["at"] if new_in else 0.0
+    if reply:
+        try:
+            send_text(line, c["phone"], reply)
+        except (RuntimeError, OSError) as e:
+            # Record the failure so the next runs don't pay Claude to write this reply again.
+            fails = c.get("fails", 0) + 1
+            retry_at = now + send_retry_delay(fails)
+            update_candidate(cols, c["id"], tracking=tracking_value(c["last_in"], c["sent"], retry_at, fails))
+            wait = dt.datetime.fromtimestamp(retry_at, dt.timezone.utc).strftime("%H:%M UTC")
+            report.append(f"SEND FAILED {c['name']}: not asking Claude again before {wait} (failure {fails}): {str(e)[:300]}")
+            if isinstance(e, HTTPStatusError) and e.status in (401, 402, 403):
+                raise QuoUnavailable(f"Quo refused to send (HTTP {e.status}); stopping this run: {str(e)[:300]}") from e
+            return
     update_candidate(cols, c["id"], stage=stage, tracking=tracking_value(last_in or now, c["sent"] + (1 if reply else 0)),
                      notes=result["notes"], car=car)
     if decision != "continue":
@@ -521,8 +571,10 @@ def main():
     workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
     client = anthropic.Anthropic(default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None)
 
-    report, errors = [], 0
+    report, errors, quo_down = [], 0, False
     for group in dict.fromkeys(c["group"] for c in cands):
+        if quo_down:
+            break
         members = [c for c in cands if c["group"] == group]
         if any(c["stage"] == HIRED for c in members):
             close_vacancy(group, members, cols, lines, now, report)
@@ -533,6 +585,11 @@ def main():
                 continue
             try:
                 handle_candidate(c, role, lines, cols, client, now, report)
+            except QuoUnavailable as e:
+                log(f"! {e}")
+                report.append(f"STOPPED: {e}")
+                quo_down = True
+                break
             except (RuntimeError, OSError, anthropic.APIError) as e:
                 errors += 1
                 log(f"! {c['name']}: {e}")
@@ -547,6 +604,8 @@ def main():
                          + f". Texting stages: {', '.join(CONTACT_STAGES)}.")
     log("\n".join(report) or "Nothing to do.")
     annotate(f"Candidate texts{' (dry run)' if DRY_RUN else ''}", report)
+    if quo_down:
+        sys.exit("Quo is refusing to send texts (check its prepaid credits and API key)")
     if errors and errors == len(report):
         sys.exit(1)  # nothing worked: likely a bad token or an API change
 

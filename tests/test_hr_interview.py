@@ -138,6 +138,66 @@ class HandleCandidateTests(unittest.TestCase):
         self.assertEqual(calls["sent"], [])
         self.assertEqual(h.parse_tracking(calls["updates"][0]["tracking"]), (float(int(NOON - 600)), 2))
 
+    def run_failing_send(self, c, msgs, error):
+        calls = {"screen": 0, "updates": []}
+        report = []
+
+        def fake_screen(client, prompt):
+            calls["screen"] += 1
+            return {"reply": "Which days work?", "decision": "continue", "notes": "", "car": "unknown"}
+
+        with mock.patch.object(h, "thread", return_value=msgs), \
+             mock.patch.object(h, "screen", side_effect=fake_screen), \
+             mock.patch.object(h, "send_text", side_effect=error), \
+             mock.patch.object(h, "update_candidate", side_effect=lambda *a, **k: calls["updates"].append(k)), \
+             mock.patch.object(h, "post_update"):
+            try:
+                h.handle_candidate(c, {}, LINES, COLS, None, NOON, report)
+            except h.QuoUnavailable:
+                calls["stopped"] = True
+        return calls, report
+
+    def test_out_of_credits_backs_off_and_stops_run(self):
+        c = cand(stage="Screening", tracking=h.tracking_value(NOON - 900, 2), last_in=NOON - 900, sent=2)
+        msgs = [{"id": "b", "at": NOON - 60, "from_us": False, "text": "Weekends"}]
+        err = h.HTTPStatusError(402, "https://api.openphone.com/v1/messages", "Not Enough Credits")
+        calls, report = self.run_failing_send(c, msgs, err)
+        self.assertTrue(calls.get("stopped"))
+        tracking = calls["updates"][0]["tracking"]
+        # The reply was not delivered, so the handled inbound and sent count stay as they were.
+        self.assertEqual(h.parse_tracking(tracking), (float(int(NOON - 900)), 2))
+        self.assertEqual(h.parse_retry(tracking), (float(int(NOON + 30 * 60)), 1))
+        self.assertIn("SEND FAILED", report[-1])
+
+        # The next run, 2 minutes later, must not ask Claude again.
+        c2 = cand(stage="Screening", tracking=tracking, last_in=NOON - 900, sent=2,
+                  retry_at=h.parse_retry(tracking)[0], fails=1)
+        with mock.patch.object(h, "thread", return_value=msgs), mock.patch.object(h, "screen") as screen:
+            h.handle_candidate(c2, {}, LINES, COLS, None, NOON + 120, [])
+        screen.assert_not_called()
+
+    def test_other_send_error_backs_off_without_stopping(self):
+        c = cand(stage="Screening", tracking=h.tracking_value(NOON - 900, 2), last_in=NOON - 900, sent=2, fails=2)
+        msgs = [{"id": "b", "at": NOON - 60, "from_us": False, "text": "Weekends"}]
+        calls, _ = self.run_failing_send(c, msgs, h.HTTPStatusError(400, "u", "bad number"))
+        self.assertFalse(calls.get("stopped"))
+        self.assertEqual(h.parse_retry(calls["updates"][0]["tracking"]), (float(int(NOON + 2 * 3600)), 3))
+
+    def test_failed_first_text_is_retried_as_first_contact(self):
+        tracking = h.tracking_value(0, 0, NOON - 60, 1)  # the retry wait is over
+        retry_at, fails = h.parse_retry(tracking)
+        c = cand(tracking=tracking, retry_at=retry_at, fails=fails)
+        self.assertTrue(h.should_screen(c))
+        calls, _ = self.run_handle(c, [], {"reply": "Hi Tish, ...", "decision": "continue", "notes": "", "car": "unknown"})
+        self.assertEqual(len(calls["sent"]), 1)
+        self.assertEqual(calls["updates"][0]["stage"], "Contacted")
+        self.assertEqual(h.parse_retry(calls["updates"][0]["tracking"]), (0.0, 0))  # cleared after a good send
+
+    def test_send_retry_delay(self):
+        self.assertEqual([h.send_retry_delay(n) for n in (1, 2, 3)], [1800, 3600, 7200])
+        self.assertEqual(h.send_retry_delay(20), 24 * 3600)
+        self.assertEqual(h.parse_tracking(h.tracking_value(NOON, 3, NOON + 60, 2)), (float(int(NOON)), 3))
+
 
 class CloseVacancyTests(unittest.TestCase):
     def test_thanks_only_texted_candidates(self):
